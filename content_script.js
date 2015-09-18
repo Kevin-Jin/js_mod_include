@@ -101,10 +101,13 @@ function processInclude(args, offset) {
 var PRECEDENCE_OPERAND = -1;
 var PRECEDENCE_BRACKET = 0;
 var PRECEDENCE_LIST = 1;
-var PRECEDENCE_BOOLEAN = 2;
-var PRECEDENCE_COMPARISON = 3;
-var PRECEDENCE_ARITHMETIC = 4;
-var PRECEDENCE_UNARY = 5;
+var PRECEDENCE_BOOLEAN = {
+	'||': 2,
+	'&&': 3
+};
+var PRECEDENCE_COMPARISON = 4;
+var PRECEDENCE_ARITHMETIC = 5;
+var PRECEDENCE_UNARY = 6;
 
 // excludes restricted functions
 var apExprFuncs = {
@@ -267,7 +270,7 @@ function tokenizeExpr(expr) {
 				expr = expr.substring(match[0].length);
 			}
 			if (match = exprBinaryOp.exec(expr)) {
-				tokens.push(makeToken(match[1], PRECEDENCE_BOOLEAN));
+				tokens.push(makeToken(match[1], PRECEDENCE_BOOLEAN[match[1]]));
 				expr = expr.substring(match[0].length);
 			}
 			if (match = wordlistBinaryOp.exec(expr)) {
@@ -693,7 +696,7 @@ function processEndIf(args, offset) {
 
 function processDirective(element, args, offset) {
 	try {
-		args = parseAttributes(args);
+		args = parseAttributes(args || '');
 		if (args === null)
 			// Apache doesn't seem to write error message if the SSI directive
 			// doesn't have the correct syntax. Only if the attributes and the
@@ -726,7 +729,7 @@ function processDirective(element, args, offset) {
 }
 
 function processShtml(input) {
-	var r = /<!--\#(.*?)\s+(.*?)\s*-->/g;
+	var r = /<!--\#(.*?)(?:\s+(.*?))?\s*-->/g;
 	var output = input;
 	var delta = 0;
 	var match;
