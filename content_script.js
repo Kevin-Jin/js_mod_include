@@ -6,7 +6,7 @@ var currentCondStruct, rootCondStruct, path;
 var switchedOutContext = [ ];
 
 function normalizeFilename(filename) {
-	if (/^([a-z][a-z0-9+.-]*:)|\/\//i.test(filename)) {
+	if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(filename)) {
 		// absolute URI or protocol relative
 		return filename;
 	} else if (/^\//.test(filename)) {
@@ -21,23 +21,61 @@ function normalizeFilename(filename) {
 function getContents(filename) {
 	var xmlhttp = new XMLHttpRequest();
 	xmlhttp.open('GET', filename, false);
+	xmlhttp.overrideMimeType('text/plain; charset=x-user-defined');
 	xmlhttp.send();
+	apExprVars['REQUEST_METHOD'] = 'GET';
+	apExprVars['LAST_MODIFIED'] = xmlhttp.getResponseHeader('Last-Modified');
 	return xmlhttp.responseText;
 }
 
-function initializeReqEnv() {
-	reqenv['QUERY_STRING'] = window.location.search.replace(/^\?/, '');
-	reqenv['PATH_INFO'] = null;
-	// FIXME: implement these. grab from getContents()
-	reqenv['DATE_GMT'] = null;
-	reqenv['DATE_LOCAL'] = null;
-	reqenv['DOCUMENT_NAME'] = null;
-	reqenv['DOCUMENT_URI'] = null;
-	reqenv['LAST_MODIFIED'] = null;
-	reqenv['QUERY_STRING_UNESCAPED'] = null;	
+function initializeApExprVars() {
+	// deep copy apExprVars
+	apExprVars = JSON.parse(JSON.stringify(apExprVars));
+
+	pad2 = function(x) { return ('0' + x).substring(x.length - 1); }
+	pad4 = function(x) { return ('000' + x).substring(x.length - 1); }
+
+	var year, mon, day, hour, min, sec
+	apExprVars['TIME_YEAR'] = year = new Date().getFullYear();
+	apExprVars['TIME_MON'] = mon = new Date().getMonth() + 1;
+	apExprVars['TIME_DAY'] = day = new Date().getDate();
+	apExprVars['TIME_HOUR'] = hour = new Date().getHours();
+	apExprVars['TIME_MIN'] = min = new Date().getMinutes();
+	apExprVars['TIME_SEC'] = sec = new Date().getSeconds();
+	apExprVars['TIME_WDAY'] = new Date().getDay();
+	apExprVars['TIME'] = pad4(year) + pad2(mon) + pad2(day) + pad2(hour) + pad2(min) + pad2(sec);
+
+	var filenameSplit = /^(?:([a-z][a-z0-9+.-]*):)?(?:\/\/)?(.*)/i.exec(path), isSubreq;
+	apExprVars['REQUEST_SCHEME'] = filenameSplit[1];
+	apExprVars['SCRIPT_FILENAME'] = apExprVars['REQUEST_FILENAME']
+			= apExprVars['DOCUMENT_URI'] = apExprVars['REQUEST_URI']
+			= filenameSplit[2];
+	apExprVars['IS_SUBREQ'] = isSubreq = switchedOutContext.length > 1;
+	apExprVars['QUERY_STRING'] = !isSubreq ? window.location.search.replace(/^\?/, '') : '';
+
+	if (!isSubreq)
+		// v('QUERY_STRING') == %{QUERY_STRING} && v('REQUEST_URI') == %{REQUEST_URI} && ...
+		// on main request, but not on subrequests. implies reqenv only copies
+		// selected values from apExprVars once, i.e. on the main request.
+		initializeReqEnv();
 }
 
-function parseAttributes(args, isConditionalExpr) {
+function initializeReqEnv() {
+	// FIXME: implement strftime
+	reqenv['DATE_GMT'] = '';
+	reqenv['DATE_LOCAL'] = '';
+	// FIXME: figure out QUERY_STRING_UNESCAPED
+	reqenv['QUERY_STRING_UNESCAPED'] = '';
+	reqenv['DOCUMENT_NAME'] = (path ? path.substring(path.lastIndexOf('/') + 1) : '');
+	if (reqenv['DOCUMENT_NAME'].indexOf('?') !== -1)
+		reqenv['DOCUMENT_NAME'] = reqenv['DOCUMENT_NAME'].substring(0, reqenv['DOCUMENT_NAME'].indexOf('?'));
+
+	// includes from apExprVars
+	for (var i = 0; i < apExprVarsIncludes.length; i++)
+		reqenv[apExprVarsIncludes[i]] = apExprVars[apExprVarsIncludes[i]];
+}
+
+function parseAttributes(args) {
 	// Apache has some strange handling of backslash. It only eats backslashes
 	// if they're succeeded by the beginning quote character
 	var r = /\s*(.+?)\s*=\s*(([\"\'\`])(.*?[^\\]|.{0})\3|[^\s]*)\s*/g;
@@ -59,9 +97,7 @@ function parseAttributes(args, isConditionalExpr) {
 			if (value[0] === '\"' || value[0] === '\'' || value[0] === '\`')
 				throw new Error('Unterminated quote');
 		}
-		if (!isConditionalExpr)
-			// FIXME: variable substitution
-			;
+		// FIXME: support $0 ... $9 from rebackref
 
 		parsed.push(attribute);
 		parsed.push(value);
@@ -115,7 +151,6 @@ function isDeadBlock(offset, thisCondStruct) {
 
 function processSet(args, offset) {
 	// FIXME: support encoding/decoding attribute
-	// FIXME: support $0 ... $9 from rebackref
 	if (args.length !== 4 || args[0] !== 'var' || args[2] !== 'value')
 		throw new Error('Incorrect arguments');
 
@@ -178,7 +213,7 @@ var apExprFuncs = {
 	v: function(variable) { return reqenv[variable] || ''; },
 	osenv: function() { throw new Error('osenv() not implemented'); },
 	note: function() { throw new Error('note() not implemented'); },
-	env: function() { throw new Error('env() not implemented'); },
+	env: function(variable) { return reqenv[variable] || ''; },
 	tolower: function(str) { return str.toLowerCase(); },
 	toupper: function(str) { return str.toUpperCase(); },
 	escape: encodeURIComponent,
@@ -191,46 +226,50 @@ var apExprFuncs = {
 
 // nothing equals NaN
 var apExprVars = {
+	// see apExprVarsIncludes
 	HTTP_ACCEPT: NaN,
-	HTTP_COOKIE: NaN,
-	HTTP_FORWARDED: NaN,
+	HTTP_COOKIE: NaN, // not sure if is include variable
+	HTTP_FORWARDED: NaN, // not sure if is include variable
 	HTTP_HOST: NaN,
-	HTTP_PROXY_CONNECTION: NaN,
-	HTTP_REFERER: NaN,
-	HTTP_USER_AGENT: NaN,
-	REQUEST_METHOD: NaN,
+	HTTP_PROXY_CONNECTION: NaN, // not sure if is include variable
+	HTTP_REFERER: NaN, // not sure if is include variable
+	HTTP_USER_AGENT: navigator.userAgent,
+	REQUEST_METHOD: 'GET',
 	REQUEST_SCHEME: NaN,
 	REQUEST_URI: NaN,
 	DOCUMENT_URI: NaN,
-	REQUEST_FILENAME: NaN,
-	SCRIPT_FILENAME: NaN,
+	SCRIPT_FILENAME: NaN, // FIXME: if path starts with file:///, this is trivial
 	LAST_MODIFIED: NaN,
+	PATH_INFO: NaN, // not sure if is include variable
+	QUERY_STRING: NaN,
+	REMOTE_ADDR: NaN,
+	REMOTE_USER: NaN, // not sure if is include variable
+	REMOTE_IDENT: NaN,
+	SERVER_NAME: '', // FIXME: set domain name from authority in getContents
+	SERVER_PORT: 80, // FIXME: set port from authority in getContents
+	SERVER_ADMIN: NaN, // email address
+	SERVER_PROTOCOL: 'HTTP/1.1',
+	DOCUMENT_ROOT: '/',
+	AUTH_TYPE: NaN, // not sure if is include variable
+	CONTEXT_PREFIX: NaN, // not sure if is include variable
+	CONTEXT_DOCUMENT_ROOT: NaN,
+	SERVER_SOFTWARE: 'chrome_mod_include ' + chrome.runtime.getManifest().version,
+
+	// not copied into reqenv on main request
+	REQUEST_FILENAME: NaN,
 	SCRIPT_USER: NaN,
 	SCRIPT_GROUP: NaN,
-	PATH_INFO: NaN,
-	QUERY_STRING: NaN,
 	IS_SUBREQ: NaN,
 	THE_REQUEST: NaN,
-	REMOTE_ADDR: NaN,
 	REMOTE_HOST: NaN,
-	REMOTE_USER: NaN,
-	REMOTE_IDENT: NaN,
-	SERVER_NAME: NaN,
-	SERVER_PORT: NaN,
-	SERVER_ADMIN: NaN,
-	SERVER_PROTOCOL: NaN,
-	DOCUMENT_ROOT: NaN,
-	AUTH_TYPE: NaN,
-	CONTENT_TYPE: NaN,
-	HANDLER: NaN,
-	HTTPS: NaN,
-	IPV6: NaN,
-	REQUEST_STATUS: NaN,
-	REQUEST_LOG_ID: NaN,
+	CONTENT_TYPE: NaN, // text/html
+	HANDLER: NaN, // text/html
+	HTTPS: 'off',
+	IPV6: 'off',
+	REQUEST_STATUS: 200,
+	REQUEST_LOG_ID: NaN, // not sure if is NOT include variable
 	CONN_LOG_ID: NaN,
 	CONN_REMOTE_ADDR: NaN,
-	CONTEXT_PREFIX: NaN,
-	CONTEXT_DOCUMENT_ROOT: NaN,
 	TIME_YEAR: NaN,
 	TIME_MON: NaN,
 	TIME_DAY: NaN,
@@ -239,9 +278,18 @@ var apExprVars = {
 	TIME_SEC: NaN,
 	TIME_WDAY: NaN,
 	TIME: NaN,
-	SERVER_SOFTWARE: NaN,
 	API_VERSION: NaN
 }
+
+// copied into reqenv on main request
+var apExprVarsIncludes = [ 'HTTP_ACCEPT', 'HTTP_COOKIE', 'HTTP_FORWARDED',
+	'HTTP_HOST', 'HTTP_PROXY_CONNECTION', 'HTTP_REFERER', 'HTTP_USER_AGENT',
+	'REQUEST_METHOD', 'REQUEST_SCHEME', 'REQUEST_URI', 'DOCUMENT_URI',
+	'SCRIPT_FILENAME', 'LAST_MODIFIED', 'PATH_INFO', 'QUERY_STRING',
+	'REMOTE_ADDR', 'REMOTE_USER', 'REMOTE_IDENT', 'SERVER_NAME', 'SERVER_PORT',
+	'SERVER_ADMIN', 'SERVER_PROTOCOL', 'DOCUMENT_ROOT', 'AUTH_TYPE',
+	'CONTEXT_PREFIX', 'CONTEXT_DOCUMENT_ROOT', 'SERVER_SOFTWARE'
+];
 
 function getNames(obj) {
 	var r = [ ];
@@ -844,9 +892,10 @@ function processDirective(element, args, offset) {
 }
 
 function processShtml(input, filename) {
-	switchedOutContext.push([ rootCondStruct, currentCondStruct, path ]);
+	switchedOutContext.push([ rootCondStruct, currentCondStruct, path, apExprVars ]);
 	currentCondStruct = rootCondStruct = makeRootCondStruct();
 	path = filename;
+	initializeApExprVars();
 	console.log('BEGIN ' + filename);
 
 	var r = /<!--\#(.*?)(?:\s+(.*?))?\s*-->/g;
@@ -897,10 +946,10 @@ function processShtml(input, filename) {
 	rootCondStruct = context[0];
 	currentCondStruct = context[1];
 	path = context[2];
+	apExprVars = context[3];
 	return output;
 }
 
-initializeReqEnv();
 var processed = processShtml(getContents(normalizeFilename(window.location.href)), normalizeFilename(window.location.href));
 
 var newDoc = document.open('text/html', 'replace');
