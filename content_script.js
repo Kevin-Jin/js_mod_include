@@ -851,9 +851,33 @@ function processShtml(input) {
 		// Apache does't throw an error if "if" is not followed by "endif"
 		processEndIf([ ], input.length + delta);
 
-	// TODO: for each condStruct, delete substring(bound[0], match[0]), substring(match[1], bound[1])
-	// while keeping track of deltas.
-	// output = output.substring(0, match[0]) + output.substring(match[0], match[1]) + output.substring(bound[1], output.length);
+	// post-order depth-first traversal, implemented non-recursively.
+	// trims if-(elif)-else statements from top-to-bottom, nested-to-enclosing.
+	// that way, we can interpret the delta variable as simply the value that
+	// unvisited indices (right siblings of current node, and right siblings of
+	// all ancestors of current node) are offset by in the transformed output.
+	var nodes = [ rootCondStruct ];
+	var visited = [ ];
+	while (nodes.length !== 0) {
+		var node = nodes.pop();
+		visited.push(node);
+		for (var i = 0; i < node.children.length; i++)
+			nodes.push(node.children[i]);
+	}
+	delta = 0;
+	while (visited.length !== 0) {
+		var node = visited.pop();
+		if (node.match) {
+			output = output.substring(0, node.bounds[0] + delta)
+					+ output.substring(node.match[0] + delta, node.match[1] + delta)
+					+ output.substring(node.bounds[1] + delta, output.length);
+			delta -= (node.match[0] - node.bounds[0]) + (node.bounds[1] - node.match[1]);
+		} else {
+			output = output.substring(0, node.bounds[0] + delta)
+					+ output.substring(node.bounds[1] + delta, output.length);
+			delta -= - node.bounds[0] + node.bounds[1];
+		}
+	}
 
 	var context = switchedOutContext.pop();
 	rootCondStruct = context[0];
