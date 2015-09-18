@@ -2,6 +2,8 @@ var echomsg = '(none)';
 var errmsg = '[an error occurred while processing this directive]';
 var reqenv = { };
 var rebackref = [ ];
+var currentCondStruct, rootCondStruct;
+var switchedOutContext = [ ];
 
 function getContents(filename) {
 	var xmlhttp = new XMLHttpRequest();
@@ -60,12 +62,53 @@ function parseAttributes(args, isConditionalExpr) {
 	return parsed;
 }
 
+function makeRootCondStruct() {
+	return {
+		bounds: [ 0, Number.POSITIVE_INFINITY ],
+		match: [ 0, Number.POSITIVE_INFINITY ],
+		children: [ ],
+		parent: null
+	};
+}
+
+function pushCondStruct(begin, end, match) {
+	currentCondStruct = {
+		bounds: [ begin, end ],
+		match: match,
+		children: [ ],
+		parent: currentCondStruct
+	};
+	currentCondStruct.parent.children.push(currentCondStruct);
+	return currentCondStruct;
+}
+
+function popCondStruct() {
+	var thisCondStruct = currentCondStruct;
+	currentCondStruct = currentCondStruct.parent;
+	return thisCondStruct;
+}
+
+// so that we don't execute a directive if we're in the false part of a branch
+function isDeadBlock(offset, thisCondStruct) {
+	thisCondStruct = thisCondStruct || currentCondStruct;
+
+	if (thisCondStruct && thisCondStruct.match && (offset < thisCondStruct.match[0] || thisCondStruct.match[1] !== Number.POSITIVE_INFINITY && offset >= thisCondStruct.bounds[1]))
+		throw new Error('Invalid isDeadBlock() check');
+
+	return (thisCondStruct && (
+		!thisCondStruct.match || offset < thisCondStruct.match[0]
+		|| thisCondStruct.match[1] !== Number.POSITIVE_INFINITY && offset >= thisCondStruct.match[1]
+	));
+}
+
 function processSet(args, offset) {
 	// FIXME: support encoding/decoding attribute
 	// FIXME: support $0 ... $9 from rebackref
 	if (args.length !== 4 || args[0] !== 'var' || args[2] !== 'value')
 		throw new Error('Incorrect arguments');
-	reqenv[args[1]] = args[3];
+
+	if (!isDeadBlock(offset))
+		reqenv[args[1]] = args[3];
 	return '';
 }
 
@@ -73,7 +116,10 @@ function processEcho(args, offset) {
 	// FIXME: support encoding/decoding attribute
 	if (args.length !== 2 || args[0] !== 'var')
 		throw new Error('Incorrect arguments');
-	if (reqenv.hasOwnProperty(args[1]))
+
+	if (isDeadBlock(offset))
+		return '';
+	else if (reqenv.hasOwnProperty(args[1]))
 		return reqenv[args[1]];
 	else
 		return echomsg;
@@ -87,10 +133,12 @@ function processInclude(args, offset) {
 	for (i = 0; i < args.length; i += 2) {
 		if (args[i] === 'virtual') {
 			didOne = true;
-			output += processShtml(getContents(args[i + 1]));
+			if (!isDeadBlock(offset))
+				output += processShtml(getContents(args[i + 1]));
 		} else if (args[i] === 'file') {
 			didOne = true;
-			output += processShtml(getContents(args[i + 1]));
+			if (!isDeadBlock(offset))
+				output += processShtml(getContents(args[i + 1]));
 		}
 	}
 	if (!didOne)
@@ -671,26 +719,82 @@ function evalExpr(expr) {
 function processIf(args, offset) {
 	if (args.length !== 2 || args[0] !== 'expr')
 		throw new Error('Incorrect arguments');
-	console.log(evalExpr(parseExpr(tokenizeExpr(args[1]))));
+
+	pushCondStruct(
+		offset, Number.POSITIVE_INFINITY,
+		!isDeadBlock(offset) && evalExpr(parseExpr(tokenizeExpr(args[1]))) ? [ offset, Number.POSITIVE_INFINITY ] : null
+	);
 	return '';
 }
 
 function processElseIf(args, offset) {
 	if (args.length !== 2 || args[0] !== 'expr')
 		throw new Error('Incorrect arguments');
-	console.log(evalExpr(parseExpr(tokenizeExpr(args[1]))));
+
+	if (currentCondStruct === rootCondStruct) {
+		// Apache just creates implicit "if" at start of file with expr="true"
+		pushCondStruct(
+			0, Number.POSITIVE_INFINITY,
+			[ 0, offset ]
+		);
+	}
+
+	if (currentCondStruct.match) {
+		if (currentCondStruct.match[1] === Number.POSITIVE_INFINITY)
+			currentCondStruct.match[1] = offset;
+	} else if (!isDeadBlock(offset, currentCondStruct.parent) && evalExpr(parseExpr(tokenizeExpr(args[1])))) {
+		// Apache doesn't throw an error if "elif" follows an "else". it looks
+		// like it just ignores any branch directive after the first match. e.g.
+		// in the case of "if"-"else" before "elif", one of those two branches
+		// must have been followed, so we ignore this "elif". so no need for us
+		// to have any kind of error trapping or other checks
+		currentCondStruct.match = [ offset, Number.POSITIVE_INFINITY ];
+	}
 	return '';
 }
 
 function processElse(args, offset) {
 	if (args.length !== 0)
 		throw new Error('Incorrect arguments');
+
+	if (currentCondStruct === rootCondStruct) {
+		// Apache just creates implicit "if" at start of file with expr="true"
+		pushCondStruct(
+			0, Number.POSITIVE_INFINITY,
+			[ 0, offset ]
+		);
+	}
+
+	if (currentCondStruct.match) {
+		if (currentCondStruct.match[1] === Number.POSITIVE_INFINITY)
+			currentCondStruct.match[1] = offset;
+	} else if (!isDeadBlock(offset, currentCondStruct.parent)) {
+		// Apache doesn't throw an error if "else" follows an "else". it looks
+		// like it just ignores any branch directive after the first match. e.g.
+		// in the case of "if"-"else" before "else", one of those two branches
+		// must have been followed, so we ignore this "else". so no need for us
+		// to have any kind of error trapping or other checks
+		currentCondStruct.match = [ offset, Number.POSITIVE_INFINITY ];
+	}
 	return '';
 }
 
 function processEndIf(args, offset) {
 	if (args.length !== 0)
 		throw new Error('Incorrect arguments');
+
+	if (currentCondStruct !== rootCondStruct) {
+		currentCondStruct.bounds[1] = offset;
+		if (currentCondStruct.match && currentCondStruct.match[1] === Number.POSITIVE_INFINITY)
+			currentCondStruct.match[1] = offset;
+
+		if (isDeadBlock(offset, currentCondStruct.parent) && currentCondStruct.match)
+			throw new Error('(el)if should not be evaluated in dead branch');
+
+		popCondStruct();
+	}
+	// Apache doesn't throw an error if "endif" does not follow an "if"
+
 	return '';
 }
 
@@ -729,6 +833,9 @@ function processDirective(element, args, offset) {
 }
 
 function processShtml(input) {
+	switchedOutContext.push([ rootCondStruct, currentCondStruct ]);
+	currentCondStruct = rootCondStruct = makeRootCondStruct();
+
 	var r = /<!--\#(.*?)(?:\s+(.*?))?\s*-->/g;
 	var output = input;
 	var delta = 0;
@@ -740,7 +847,17 @@ function processShtml(input) {
 		output = output.substring(0, offset) + replacement + output.substring(offset + directiveLen, output.length);
 		delta += replacement.length - directiveLen;
 	}
+	while (currentCondStruct !== rootCondStruct)
+		// Apache does't throw an error if "if" is not followed by "endif"
+		processEndIf([ ], input.length + delta);
 
+	// TODO: for each condStruct, delete substring(bound[0], match[0]), substring(match[1], bound[1])
+	// while keeping track of deltas.
+	// output = output.substring(0, match[0]) + output.substring(match[0], match[1]) + output.substring(bound[1], output.length);
+
+	var context = switchedOutContext.pop();
+	rootCondStruct = context[0];
+	currentCondStruct = context[1];
 	console.log('END');
 	return output;
 }
