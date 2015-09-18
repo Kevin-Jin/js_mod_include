@@ -43,7 +43,7 @@ function parseAttributes(args, isConditionalExpr) {
 			// non-quoted string
 			value = match[2];
 			if (value[0] === '\"' || value[0] === '\'' || value[0] === '\`')
-				throw 'Unterminated quote';
+				throw new Error('Unterminated quote');
 		}
 		if (!isConditionalExpr)
 			// FIXME: variable substitution
@@ -56,34 +56,30 @@ function parseAttributes(args, isConditionalExpr) {
 	// Apache doesn't seem to mind any characters after the last valid attribute
 	// unless they are quotes or an equal sign
 	if (/[=\"\'\`]/.test(args.substring(lastMatch)))
-		throw 'Invalid arguments';
+		throw new Error('Invalid arguments');
 	return parsed;
 }
 
-function isWhitespace(text) {
-	return text.replace(/^\s+|\s+$/gm,'').length === 0;
-}
-
-function processSet(args) {
+function processSet(args, offset) {
 	// FIXME: support encoding/decoding attribute
 	// FIXME: support $0 ... $9 from rebackref
 	if (args.length !== 4 || args[0] !== 'var' || args[2] !== 'value')
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	reqenv[args[1]] = args[3];
 	return '';
 }
 
-function processEcho(args) {
+function processEcho(args, offset) {
 	// FIXME: support encoding/decoding attribute
 	if (args.length !== 2 || args[0] !== 'var')
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	if (reqenv.hasOwnProperty(args[1]))
 		return reqenv[args[1]];
 	else
 		return echomsg;
 }
 
-function processInclude(args) {
+function processInclude(args, offset) {
 	// FIXME: support onerror attribute
 	// FIXME: NESTED INCLUDES NEEDS TO BE RELATIVE TO PATH OF LOADED DOC
 	// FIXME: distinguish between file/virtual
@@ -98,7 +94,7 @@ function processInclude(args) {
 		}
 	}
 	if (!didOne)
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	return output;
 }
 
@@ -112,23 +108,23 @@ var PRECEDENCE_UNARY = 5;
 
 // excludes restricted functions
 var apExprFuncs = {
-	req: function() { throw 'req() not implemented'; },
-	http: function() { throw 'http() not implemented'; },
-	req_novary: function() { throw 'req_novary() not implemented'; },
-	resp: function() { throw 'resp() not implemented'; },
+	req: function() { throw new Error('req() not implemented'); },
+	http: function() { throw new Error('http() not implemented'); },
+	req_novary: function() { throw new Error('req_novary() not implemented'); },
+	resp: function() { throw new Error('resp() not implemented'); },
 	reqenv: function(variable) { return reqenv[variable] || ''; },
 	v: function(variable) { return reqenv[variable] || ''; },
-	osenv: function() { throw 'osenv() not implemented'; },
-	note: function() { throw 'note() not implemented'; },
-	env: function() { throw 'env() not implemented'; },
+	osenv: function() { throw new Error('osenv() not implemented'); },
+	note: function() { throw new Error('note() not implemented'); },
+	env: function() { throw new Error('env() not implemented'); },
 	tolower: function(str) { return str.toLowerCase(); },
 	toupper: function(str) { return str.toUpperCase(); },
 	escape: encodeURIComponent,
 	unescape: decodeURIComponent,
 	base64: window.btoa,
 	unbase64: window.atob,
-	md5: function() { throw 'md5() not implemented'; },
-	sha1: function() { throw 'sha1() not implemented'; }
+	md5: function() { throw new Error('md5() not implemented'); },
+	sha1: function() { throw new Error('sha1() not implemented'); }
 };
 
 // nothing equals NaN
@@ -257,7 +253,7 @@ function tokenizeExpr(expr) {
 			}
 			if (match = functionWord.exec(expr)) {
 				if (match[3]) // valid syntax but invalid function name
-					throw 'Unknown function call ' + match[3];
+					throw new Error('Unknown function call ' + match[3]);
 
 				tokens.push(makeToken(match[1], PRECEDENCE_UNARY, 'function'));
 				expr = expr.substring(match[0].length);
@@ -294,7 +290,7 @@ function tokenizeExpr(expr) {
 			}
 			if (match = regexp.exec(expr)) {
 				if (match[6] !== '' && match[6] !== 'i')
-					throw 'Only the \'i\' flag is supported for regex';
+					throw new Error('Only the \'i\' flag is supported for regex');
 
 				tokens.push(makeToken(new RegExp(match[3] || match[5], match[6]), PRECEDENCE_OPERAND, 'regexp'));
 				expr = expr.substring(match[0].length);
@@ -324,9 +320,9 @@ function tokenizeExpr(expr) {
 		if (match = variable.exec(expr)) {
 			if (match[6]) // valid syntax but invalid variable/function name
 				if (match[7])
-					throw 'Unknown function call ' + match[6];
+					throw new Error('Unknown function call ' + match[6]);
 				else
-					throw 'Unknown variable ' + match[6];
+					throw new Error('Unknown variable ' + match[6]);
 
 			if (quoteChar)
 				if (precededByStringPart)
@@ -371,11 +367,11 @@ function tokenizeExpr(expr) {
 
 		// no matches made
 		if (expr.length === startLen)
-			throw 'Syntax error: near "' + expr + '"';
+			throw new Error('Syntax error: near "' + expr + '"');
 	}
 
 	if (quoteChar)
-		throw 'Syntax error: unterminated string';
+		throw new Error('Syntax error: unterminated string');
 	return tokens;
 }
 
@@ -421,13 +417,13 @@ function parseExpr(expr) {
 					while (operatorStack.length !== 0 && (stackOp = operatorStack.pop()).text !== match)
 						outputQueue.push(stackOp);
 					if (operatorStack.length === 0 && stackOp.text !== match)
-						throw 'Mismatched brackets';
+						throw new Error('Mismatched brackets');
 					break;
 				}
 			}
 		} else {
 			if (token.precedence !== PRECEDENCE_OPERAND)
-				throw 'Unknown token ' + token.text;
+				throw new Error('Unknown token ' + token.text);
 			outputQueue.push(token);
 		}
 	}
@@ -435,7 +431,7 @@ function parseExpr(expr) {
 	while (operatorStack.length !== 0) {
 		var stackOp = operatorStack.pop();
 		if (stackOp === '(' || stackOp === '{')
-			throw 'Mismatched brackets';
+			throw new Error('Mismatched brackets');
 		outputQueue.push(stackOp);
 	}
 	return outputQueue;
@@ -448,7 +444,7 @@ function applyUnaryFunction(func, operand) {
 	switch (func.text) {
 		case '!':
 			if (operand.type !== 'boolean')
-				throw 'Cannot operate on non-booleans';
+				throw new Error('Cannot operate on non-booleans');
 			return makeToken(!operand.text, PRECEDENCE_OPERAND, 'boolean');
 		case '-U':
 		case '-A':
@@ -495,7 +491,7 @@ function applyBinaryFunction(func, operand1, operand2) {
 		case '.':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot concatenate non-alphanumerics';
+				throw new Error('Cannot concatenate non-alphanumerics');
 
 			return makeToken('' + operand1.text + operand2.text, PRECEDENCE_OPERAND, 'string');
 		// wordlist operations
@@ -505,53 +501,53 @@ function applyBinaryFunction(func, operand1, operand2) {
 			else if (operand1.type === 'wordlist')
 				operand1 = cloneToken(operand1); // prevent side effects
 			else
-				throw 'Cannot concatenate non-alphanumerics';
+				throw new Error('Cannot concatenate non-alphanumerics');
 
 			if (operand2.type === 'digit' || operand2.type === 'string')
 				operand1.text.push(operand2);
 			else if (operand2.type === 'wordlist')
 				Array.prototype.push.apply(operand1.text, operand2.text);
 			else
-				throw 'Cannot concatenate non-alphanumerics';
+				throw new Error('Cannot concatenate non-alphanumerics');
 
 			return operand1;
 		case 'in':
 		case '-in':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'wordlist')
-				throw 'Second operand of -in must be a wordlist';
+				throw new Error('Second operand of -in must be a wordlist');
 			return makeToken(falsyIndexOf(operand2.text, operand1.text) !== -1, PRECEDENCE_OPERAND, 'boolean');
 		// string comparisons
 		case '=':
 		case '==':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) === 0, PRECEDENCE_OPERAND, 'boolean');
 		case '!=':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) !== 0, PRECEDENCE_OPERAND, 'boolean');
 		case '<':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) < 0, PRECEDENCE_OPERAND, 'boolean');
 		case '<=':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) <= 0, PRECEDENCE_OPERAND, 'boolean');
 		case '>':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) > 0, PRECEDENCE_OPERAND, 'boolean');
 		case '>=':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(operand1.text.localeCompare(operand2.text) >= 0, PRECEDENCE_OPERAND, 'boolean');
 		// integer comparisons
 		// Apache conveniently also stops reading characters after the first
@@ -560,59 +556,59 @@ function applyBinaryFunction(func, operand1, operand2) {
 		case '-eq':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) === parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		case 'ne':
 		case '-ne':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) !== parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		case 'lt':
 		case '-lt':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) < parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		case 'le':
 		case '-le':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) <= parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		case 'gt':
 		case '-gt':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) > parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		case 'ge':
 		case '-ge':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'digit' && operand2.type !== 'string')
-				throw 'Cannot compare non-alphanumerics';
+				throw new Error('Cannot compare non-alphanumerics');
 			return makeToken(parseInt(operand1.text) >= parseInt(operand2.text), PRECEDENCE_OPERAND, 'boolean');
 		// regex comparisons
 		case '=~':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'regexp')
-				throw 'Second operand of =~ must be regexp';
+				throw new Error('Second operand of =~ must be regexp');
 			rebackref = operand2.text.exec(operand1.text) || [ ];
 			return makeToken(rebackref != false, PRECEDENCE_OPERAND, 'boolean');
 		case '!~':
 			if (operand1.type !== 'digit' && operand1.type !== 'string'
 					|| operand2.type !== 'regexp')
-				throw 'Second operand of !~ must be regexp';
+				throw new Error('Second operand of !~ must be regexp');
 			rebackref = operand2.text.exec(operand1.text) || [ ];
 			return makeToken(rebackref == false, PRECEDENCE_OPERAND, 'boolean');
 		// boolean operators
 		case '&&':
 			if (operand1.type !== 'boolean' && operand2.type !== 'boolean')
-				throw 'Cannot operate on non-booleans';
+				throw new Error('Cannot operate on non-booleans');
 			return makeToken(operand1.text && operand2.text, PRECEDENCE_OPERAND, 'boolean');
 		case '||':
 			if (operand1.type !== 'boolean' && operand2.type !== 'boolean')
-				throw 'Cannot operate on non-booleans';
+				throw new Error('Cannot operate on non-booleans');
 			return makeToken(operand1.text || operand2.text, PRECEDENCE_OPERAND, 'boolean');
 		default:
 			throw func.text + ' not implemented';
@@ -655,47 +651,47 @@ function evalExpr(expr) {
 			}
 			case PRECEDENCE_BRACKET: {
 				// bracket carried over from infix expression
-				throw 'Bracket cannot be in eval string';
+				throw new Error('Bracket cannot be in eval string');
 			}
 		}
 	}
 
 	if (evaluationStack.length !== 1)
-		throw 'Syntax error';
+		throw new Error('Syntax error');
 	var result = evaluationStack.pop();
 	if (result.precedence != PRECEDENCE_OPERAND || result.type !== 'boolean')
-		throw 'Syntax error';
+		throw new Error('Syntax error');
 
 	return result.text;
 }
 
-function processIf(args) {
+function processIf(args, offset) {
 	if (args.length !== 2 || args[0] !== 'expr')
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	console.log(evalExpr(parseExpr(tokenizeExpr(args[1]))));
 	return '';
 }
 
-function processElseIf(args) {
+function processElseIf(args, offset) {
 	if (args.length !== 2 || args[0] !== 'expr')
-		throw 'Incorrect arguments';
-	console.log(tokenizeExpr(args[1]));
+		throw new Error('Incorrect arguments');
+	console.log(evalExpr(parseExpr(tokenizeExpr(args[1]))));
 	return '';
 }
 
-function processElse(args) {
+function processElse(args, offset) {
 	if (args.length !== 0)
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	return '';
 }
 
-function processEndIf(args) {
+function processEndIf(args, offset) {
 	if (args.length !== 0)
-		throw 'Incorrect arguments';
+		throw new Error('Incorrect arguments');
 	return '';
 }
 
-function processDirective(element, args) {
+function processDirective(element, args, offset) {
 	try {
 		args = parseAttributes(args);
 		if (args === null)
@@ -706,25 +702,25 @@ function processDirective(element, args) {
 
 		switch (element) {
 			case 'set':
-				return processSet(args);
+				return processSet(args, offset);
 			case 'echo':
-				return processEcho(args);
+				return processEcho(args, offset);
 			case 'include':
-				return processInclude(args);
+				return processInclude(args, offset);
 			case 'if':
-				return processIf(args);
+				return processIf(args, offset);
 			case 'elif':
-				return processElseIf(args);
+				return processElseIf(args, offset);
 			case 'else':
-				return processElse(args);
+				return processElse(args, offset);
 			case 'endif':
-				return processEndIf(args);
+				return processEndIf(args, offset);
 			// FIXME: handle config, fsize, flastmod, printenv
 			default:
-				throw 'Unsupported directive: ' + element;
+				throw new Error('Unsupported directive: ' + element);
 		}
 	} catch (e) {
-		console.log(e);
+		console.log(e.stack);
 		return errmsg;
 	}
 }
@@ -735,10 +731,14 @@ function processShtml(input) {
 	var delta = 0;
 	var match;
 	while (match = r.exec(input)) {
-		var replacement = processDirective(match[1], match[2]);
-		output = output.substring(0, match.index + delta) + replacement + output.substring(match.index + delta + match[0].length, output.length);
-		delta += replacement.length - match[0].length;
+		var offset = match.index + delta;
+		var directiveLen = match[0].length;
+		var replacement = processDirective(match[1], match[2], offset);
+		output = output.substring(0, offset) + replacement + output.substring(offset + directiveLen, output.length);
+		delta += replacement.length - directiveLen;
 	}
+
+	console.log('END');
 	return output;
 }
 
