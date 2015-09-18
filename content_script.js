@@ -2,14 +2,26 @@ var echomsg = '(none)';
 var errmsg = '[an error occurred while processing this directive]';
 var reqenv = { };
 var rebackref = [ ];
-var currentCondStruct, rootCondStruct;
+var currentCondStruct, rootCondStruct, path;
 var switchedOutContext = [ ];
+
+function normalizeFilename(filename) {
+	if (/^([a-z][a-z0-9+.-]*:)|\/\//i.test(filename)) {
+		// absolute URI or protocol relative
+		return filename;
+	} else if (/^\//.test(filename)) {
+		// absolute on authority
+		return filename;
+	} else {
+		// relative
+		return (path ? path.substring(0, path.lastIndexOf('/') + 1) : '') + filename;
+	}
+}
 
 function getContents(filename) {
 	var xmlhttp = new XMLHttpRequest();
 	xmlhttp.open('GET', filename, false);
 	xmlhttp.send();
-	console.log('Opening ' + filename);
 	return xmlhttp.responseText;
 }
 
@@ -127,18 +139,17 @@ function processEcho(args, offset) {
 
 function processInclude(args, offset) {
 	// FIXME: support onerror attribute
-	// FIXME: NESTED INCLUDES NEEDS TO BE RELATIVE TO PATH OF LOADED DOC
 	// FIXME: distinguish between file/virtual
 	var i, didOne = false, output = '';
 	for (i = 0; i < args.length; i += 2) {
 		if (args[i] === 'virtual') {
 			didOne = true;
 			if (!isDeadBlock(offset))
-				output += processShtml(getContents(args[i + 1]));
+				output += processShtml(getContents(normalizeFilename(args[i + 1])), normalizeFilename(args[i + 1]));
 		} else if (args[i] === 'file') {
 			didOne = true;
 			if (!isDeadBlock(offset))
-				output += processShtml(getContents(args[i + 1]));
+				output += processShtml(getContents(normalizeFilename(args[i + 1])), normalizeFilename(args[i + 1]));
 		}
 	}
 	if (!didOne)
@@ -832,9 +843,11 @@ function processDirective(element, args, offset) {
 	}
 }
 
-function processShtml(input) {
-	switchedOutContext.push([ rootCondStruct, currentCondStruct ]);
+function processShtml(input, filename) {
+	switchedOutContext.push([ rootCondStruct, currentCondStruct, path ]);
 	currentCondStruct = rootCondStruct = makeRootCondStruct();
+	path = filename;
+	console.log('BEGIN ' + filename);
 
 	var r = /<!--\#(.*?)(?:\s+(.*?))?\s*-->/g;
 	var output = input;
@@ -879,15 +892,16 @@ function processShtml(input) {
 		}
 	}
 
+	console.log('END ' + path);
 	var context = switchedOutContext.pop();
 	rootCondStruct = context[0];
 	currentCondStruct = context[1];
-	console.log('END');
+	path = context[2];
 	return output;
 }
 
 initializeReqEnv();
-var processed = processShtml(getContents(window.location.href));
+var processed = processShtml(getContents(normalizeFilename(window.location.href)), normalizeFilename(window.location.href));
 
 var newDoc = document.open('text/html', 'replace');
 newDoc.write(processed);
