@@ -50,6 +50,11 @@ function initializeApExprVars() {
 	apExprVars['SCRIPT_FILENAME'] = apExprVars['REQUEST_FILENAME']
 			= apExprVars['DOCUMENT_URI'] = apExprVars['REQUEST_URI']
 			= filenameSplit[2];
+	if (filenameSplit[1].toLowerCase() == 'file') {
+		filenameSplit = /^([\w\-\.]*)\/(.*)/.exec(filenameSplit[2]);
+		if (filenameSplit[1] == '' || filenameSplit[1] == '127.0.0.1' || filenameSplit[1].toLowerCase() == 'localhost')
+			apExprVars['SCRIPT_FILENAME'] = apExprVars['REQUEST_FILENAME'] = filenameSplit[2];
+	}
 	apExprVars['IS_SUBREQ'] = isSubreq = switchedOutContext.length > 1;
 	apExprVars['QUERY_STRING'] = !isSubreq ? window.location.search.replace(/^\?/, '') : '';
 
@@ -97,9 +102,8 @@ function parseAttributes(args) {
 			if (value[0] === '\"' || value[0] === '\'' || value[0] === '\`')
 				throw new Error('Unterminated quote');
 		}
-		// FIXME: support $0 ... $9 from rebackref
 
-		parsed.push(attribute);
+		parsed.push(attribute.toLowerCase());
 		parsed.push(value);
 		lastMatch = match.index + match[0].length;
 	}
@@ -108,6 +112,29 @@ function parseAttributes(args) {
 	if (/[=\"\'\`]/.test(args.substring(lastMatch)))
 		throw new Error('Invalid arguments');
 	return parsed;
+}
+
+function interpolateArguments(args) {
+	// Apache has some strange handling of backslash. It only eats backslashes
+	// if they're succeeded by the dollar sign character
+	for (var i = 0; i < args.length; i += 2) {
+		// interpolate regexp backreferences
+		args[i + 1] = args[i + 1].replace(/(\\)\$|\$(?:(\w+)|\{(.*?)\})/g, function(match, p1, p2, p3, offset, string) {
+			if (p1) // escaped dollar sign. eat the backslash
+				if (match == '\\$')
+					return '$';
+				else
+					throw new Error('Assertion failed.');
+
+			var id = p2 || p3 || '';
+			if (/^\d$/.test(id)) // single digit -> rebackref, even if rebackref[id] is undefined and reqenv[id] is defined
+				return rebackref[id] || '';
+			else
+				return reqenv[id] || '';
+		});
+	}
+
+	return args;
 }
 
 function makeRootCondStruct() {
@@ -150,29 +177,41 @@ function isDeadBlock(offset, thisCondStruct) {
 }
 
 function processSet(args, offset) {
+	args = interpolateArguments(args);
 	// FIXME: support encoding/decoding attribute
 	if (args.length !== 4 || args[0] !== 'var' || args[2] !== 'value')
 		throw new Error('Incorrect arguments');
 
 	if (!isDeadBlock(offset))
 		reqenv[args[1]] = args[3];
+
 	return '';
 }
 
 function processEcho(args, offset) {
+	args = interpolateArguments(args);
 	// FIXME: support encoding/decoding attribute
 	if (args.length !== 2 || args[0] !== 'var')
 		throw new Error('Incorrect arguments');
 
 	if (isDeadBlock(offset))
 		return '';
-	else if (reqenv.hasOwnProperty(args[1]))
-		return reqenv[args[1]];
+
+	var id = args[1];
+	if (/^\d$/.test(id)) // single digit -> rebackref, even if rebackref[id] is undefined and reqenv[id] is defined
+		if ((id = parseInt(id)) < rebackref.length)
+			return rebackref[id] || '';
+		else
+			return echomsg;
 	else
-		return echomsg;
+		if (reqenv.hasOwnProperty(id))
+			return reqenv[id];
+		else
+			return echomsg;
 }
 
 function processInclude(args, offset) {
+	args = interpolateArguments(args);
 	// FIXME: support onerror attribute
 	// FIXME: distinguish between file/virtual
 	var i, didOne = false, output = '';
@@ -238,7 +277,7 @@ var apExprVars = {
 	REQUEST_SCHEME: NaN,
 	REQUEST_URI: NaN,
 	DOCUMENT_URI: NaN,
-	SCRIPT_FILENAME: NaN, // FIXME: if path starts with file:///, this is trivial
+	SCRIPT_FILENAME: NaN,
 	LAST_MODIFIED: NaN,
 	PATH_INFO: NaN, // not sure if is include variable
 	QUERY_STRING: NaN,
@@ -886,7 +925,7 @@ function processDirective(element, args, offset) {
 				throw new Error('Unsupported directive: ' + element);
 		}
 	} catch (e) {
-		console.log(e.stack);
+		console.error(e.stack);
 		return errmsg;
 	}
 }
@@ -905,7 +944,7 @@ function processShtml(input, filename) {
 	while (match = r.exec(input)) {
 		var offset = match.index + delta;
 		var directiveLen = match[0].length;
-		var replacement = processDirective(match[1], match[2], offset);
+		var replacement = processDirective(match[1].toLowerCase(), match[2], offset);
 		output = output.substring(0, offset) + replacement + output.substring(offset + directiveLen, output.length);
 		delta += replacement.length - directiveLen;
 	}
