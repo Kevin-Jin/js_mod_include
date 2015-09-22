@@ -1,17 +1,20 @@
 {
-  "update_url":"http://clients2.google.com/service/update2/crx",
-  "name": "chrome_mod_include (SHTML processor)",
+  "short_name": "js_mod_include",
+  "name": "js_mod_include (SHTML processor)",
   "description": "A content script that emulates mod_include (under Apache 2.3.13 and later) on local .shtml files.",
-  "version": "0.2",
+  "author": "Kevin Jin",
+  "version": "0.3.0",
+  "homepage_url": "https://github.com/Kevin-Jin/js_mod_include",
   "permissions": [
     "tabs",
     "webRequest"
   ],
   "content_scripts": [
     {
-      "matches": ["file://*/*.shtml*"],
-      "js": ["content_script.js"]
+      "matches": [ "file://*/*.shtml*" ],
+      "js": [ "data/content_script.js" ]
     }  
   ],
-  "manifest_version": 2
+  "manifest_version": 2,
+  "update_url": "http://clients2.google.com/service/update2/crx"
 }

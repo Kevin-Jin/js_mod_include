@@ -292,7 +292,7 @@ var apExprVars = {
 	AUTH_TYPE: NaN, // not sure if is include variable
 	CONTEXT_PREFIX: NaN, // not sure if is include variable
 	CONTEXT_DOCUMENT_ROOT: NaN,
-	SERVER_SOFTWARE: 'chrome_mod_include ' + chrome.runtime.getManifest().version,
+	SERVER_SOFTWARE: typeof chrome !== 'undefined' ? 'js_mod_include ' + chrome.runtime.getManifest().version : 'js_mod_include',
 
 	// not copied into reqenv on main request
 	REQUEST_FILENAME: NaN,
@@ -991,6 +991,15 @@ function processShtml(input, filename) {
 
 var processed = processShtml(getContents(normalizeFilename(window.location.href)), normalizeFilename(window.location.href));
 
-var newDoc = document.open('text/html', 'replace');
-newDoc.write(processed);
-newDoc.close();
+try {
+	var newDoc = (typeof unsafeWindow  === 'undefined' ? window : unsafeWindow).document.open('text/html', 'replace');
+	newDoc.write(processed);
+	newDoc.close();
+} catch(e) {
+	console.error(e.message);
+	if (e.name === 'SecurityError') {
+		var script = document.createElement('script');
+		script.innerHTML = 'var newDoc = document.open("text/html", "replace"); newDoc.write(' + JSON.stringify(processed) + '); newDoc.close();';
+		document.body.appendChild(script);
+	}
+}

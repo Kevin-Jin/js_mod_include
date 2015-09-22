@@ -1,0 +1,17 @@
+{
+  "name": "js_mod_include",
+  "title": "js_mod_include (SHTML processor)",
+  "description": "A content script that emulates mod_include (under Apache 2.3.13 and later) on local .shtml files.",
+  "author": "Kevin Jin",
+  "version": "0.3.0",
+  "homepage": "https://github.com/Kevin-Jin/js_mod_include",
+  "permissions": {
+    "cross-domain-content": [ "file:///" ]
+  },
+  "engines": {
+    "firefox": ">=38.0a1"
+  },
+  "main": "index.js",
+  "license": "GPL"
+  "id": "js_mod_include@kevinj.in",
+}
