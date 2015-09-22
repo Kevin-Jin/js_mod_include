@@ -12,6 +12,6 @@
     "firefox": ">=38.0a1"
   },
   "main": "index.js",
-  "license": "GPL"
-  "id": "js_mod_include@kevinj.in",
+  "license": "GPL",
+  "id": "js_mod_include@kevinj.in"
 }
