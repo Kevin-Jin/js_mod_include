@@ -79,7 +79,7 @@ function initializeReqEnv() {
 	// FIXME: implement strftime
 	reqenv['DATE_GMT'] = '';
 	reqenv['DATE_LOCAL'] = '';
-	reqenv['QUERY_STRING_UNESCAPED'] = apExprVars['QUERY_STRING'].replace(shellMetaCharacters, '\\$1');
+	reqenv['QUERY_STRING_UNESCAPED'] = decodeURIComponent(apExprVars['QUERY_STRING']).replace(shellMetaCharacters, '\\$1');
 	reqenv['DOCUMENT_NAME'] = (path ? path.substring(path.lastIndexOf('/') + 1) : '');
 	if (reqenv['DOCUMENT_NAME'].indexOf('?') !== -1)
 		reqenv['DOCUMENT_NAME'] = reqenv['DOCUMENT_NAME'].substring(0, reqenv['DOCUMENT_NAME'].indexOf('?'));
