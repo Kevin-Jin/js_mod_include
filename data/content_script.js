@@ -5,6 +5,11 @@ var rebackref = [ ];
 var currentCondStruct, rootCondStruct, path;
 var switchedOutContext = [ ];
 
+var lastFsize;
+
+// perhaps based on Bourne shell and not BASH considering Apache escapes [^] (for pipe) but not [!%]
+var shellMetaCharacters = /([\\\^$[\](){}<>"'`*?|&~#;])/g;
+
 function normalizeFilename(filename) {
 	if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(filename)) {
 		// absolute URI or protocol relative
@@ -25,7 +30,12 @@ function getContents(filename) {
 	xmlhttp.send();
 	apExprVars['REQUEST_METHOD'] = 'GET';
 	apExprVars['LAST_MODIFIED'] = xmlhttp.getResponseHeader('Last-Modified');
-	return xmlhttp.responseText;
+
+	// we do the roundabout charset=x-user-defined followed by utf8.decode()
+	// instead of just using charset=utf-8 so that xmlhttp.responseText.length
+	// can be used for our fsize implementation
+	lastFsize = xmlhttp.responseText.length;
+	return utf8.decode(xmlhttp.responseText);
 }
 
 function initializeApExprVars() {
@@ -69,8 +79,7 @@ function initializeReqEnv() {
 	// FIXME: implement strftime
 	reqenv['DATE_GMT'] = '';
 	reqenv['DATE_LOCAL'] = '';
-	// FIXME: figure out QUERY_STRING_UNESCAPED
-	reqenv['QUERY_STRING_UNESCAPED'] = '';
+	reqenv['QUERY_STRING_UNESCAPED'] = apExprVars['QUERY_STRING'].replace(shellMetaCharacters, '\\$1');
 	reqenv['DOCUMENT_NAME'] = (path ? path.substring(path.lastIndexOf('/') + 1) : '');
 	if (reqenv['DOCUMENT_NAME'].indexOf('?') !== -1)
 		reqenv['DOCUMENT_NAME'] = reqenv['DOCUMENT_NAME'].substring(0, reqenv['DOCUMENT_NAME'].indexOf('?'));
@@ -83,7 +92,7 @@ function initializeReqEnv() {
 function parseAttributes(args) {
 	// Apache has some strange handling of backslash. It only eats backslashes
 	// if they're succeeded by the beginning quote character
-	var r = /\s*(.+?)\s*=\s*(([\"\'\`])(.*?[^\\]|.{0})\3|[^\s]*)\s*/g;
+	var r = /\s*(.+?)\s*=\s*((["'`])(.*?[^\\]|.{0})\3|[^\s]*)\s*/g;
 	var match;
 	var lastMatch = 0;
 	var parsed = [ ];
@@ -109,7 +118,7 @@ function parseAttributes(args) {
 	}
 	// Apache doesn't seem to mind any characters after the last valid attribute
 	// unless they are quotes or an equal sign
-	if (/[=\"\'\`]/.test(args.substring(lastMatch)))
+	if (/[="'`]/.test(args.substring(lastMatch)))
 		throw new Error('Invalid arguments');
 	return parsed;
 }
@@ -213,7 +222,8 @@ function processEcho(args, offset) {
 function processInclude(args, offset) {
 	args = interpolateArguments(args);
 	// FIXME: support onerror attribute
-	// FIXME: distinguish between file/virtual
+	// FIXME: 'file' can't begin with '/' or have any '../'
+	// FIXME: 'virtual' can have percent encoded QUERY_STRING. can't begin with URI scheme or authority
 	var i, didOne = false, output = '';
 	for (i = 0; i < args.length; i += 2) {
 		if (args[i] === 'virtual') {
@@ -271,7 +281,7 @@ var apExprVars = {
 	HTTP_FORWARDED: NaN, // not sure if is include variable
 	HTTP_HOST: NaN,
 	HTTP_PROXY_CONNECTION: NaN, // not sure if is include variable
-	HTTP_REFERER: NaN, // not sure if is include variable
+	HTTP_REFERER: document.referrer, // not sure if is include variable
 	HTTP_USER_AGENT: navigator.userAgent,
 	REQUEST_METHOD: 'GET',
 	REQUEST_SCHEME: NaN,
@@ -284,8 +294,8 @@ var apExprVars = {
 	REMOTE_ADDR: NaN,
 	REMOTE_USER: NaN, // not sure if is include variable
 	REMOTE_IDENT: NaN,
-	SERVER_NAME: '', // FIXME: set domain name from authority in getContents
-	SERVER_PORT: 80, // FIXME: set port from authority in getContents
+	SERVER_NAME: window.location.hostname, // #include can't specify URI authorities, so this is constant
+	SERVER_PORT: parseInt(window.location.port || 80), // #include can't specify URI authorities, so this is constant
 	SERVER_ADMIN: NaN, // email address
 	SERVER_PROTOCOL: 'HTTP/1.1',
 	DOCUMENT_ROOT: '/',
@@ -377,25 +387,25 @@ function tokenizeExpr(expr) {
 	var digit = /^\s*(\d+)/;
 	// true or false
 	var bool = /^\s*(true|false)/;
-	// not described in the BNF. FIXME: any escapes on \3 to be aware of?
+	// not described in the BNF
 	var regexp = /^\s*((\/(.*?)\/|m(.)(.*?)\4)([A-Za-z]*))/;
 
 	// quotes
-	var stringGroup = /^\s*(['"])/;
+	var stringGroup = /^\s*(["'])/;
 	// variables and functions string interpolation. NOT case sensitive
 	var variable = new RegExp(apExprVarRegexStr, 'i');
 	// regular expression backreference string interpolation
 	var rebackref = /^\s*(\$\d)/;
-	// any text within a word that's not a variable or rebackref or end of quote
-	var cstring, baseCstring = /^\s*(((?!%\{\w*(:.*?)?\})(?!\$\d).)+)/;
+	// any text within a word that's not a (unescaped) variable, rebackref, or end of quote
+	var cstring, baseCstring = /^\s*((\\.|(?!\\)(?!%\{\w*(:.*?)?\})(?!\$\d).)+)/;
 
 	var i = 0;
 	var match;
-	var quoteChar = null, precededByStringPart = false;
+	var precededByStringPart = false;
 	var tokens = [ ];
 	while (expr !== '') {
 		startLen = expr.length;
-		if (!quoteChar) {
+		if (!cstring) {
 			if (match = compUnaryOp.exec(expr)) {
 				tokens.push(makeToken(match[1], PRECEDENCE_UNARY, 'operator'));
 				expr = expr.substring(match[0].length);
@@ -447,17 +457,16 @@ function tokenizeExpr(expr) {
 		}
 
 		if (match = stringGroup.exec(expr)) {
-			if (quoteChar) {
-				quoteChar = cstring = null;
+			if (cstring) {
+				cstring = null;
 				if (!precededByStringPart)
 					tokens.push(makeToken('', PRECEDENCE_OPERAND, 'string')); // token was just an empty string
 				// make concatenation explicit and push that to parser. there
 				// is no need for quotes, but assert order of operations
 				tokens.push(makeToken(')', PRECEDENCE_BRACKET));
 			} else {
-				quoteChar = match[1];
-				// FIXME: don't eat quotes if they are escaped
-				cstring = new RegExp(baseCstring.source.substring(0, 6) + '(?!' + quoteChar + ')' + baseCstring.source.substring(6), baseCstring.flags);
+				// text within word must not match our (unescaped) quote character
+				cstring = new RegExp(baseCstring.source.substring(0, 10) + '(?!' + match[1] + ')' + baseCstring.source.substring(10), baseCstring.flags);
 				// make concatenation explicit and push that to parser. there
 				// is no need for quotes, but assert order of operations
 				tokens.push(makeToken('(', PRECEDENCE_BRACKET));
@@ -473,7 +482,7 @@ function tokenizeExpr(expr) {
 				else
 					throw new Error('Unknown variable ' + match[6]);
 
-			if (quoteChar)
+			if (cstring)
 				if (precededByStringPart)
 					tokens.push(makeToken('.', PRECEDENCE_ARITHMETIC)); // explicit concatenation
 				else
@@ -492,7 +501,7 @@ function tokenizeExpr(expr) {
 			expr = expr.substring(match[0].length);
 		}
 		if (match = rebackref.exec(expr)) {
-			if (quoteChar)
+			if (cstring)
 				if (precededByStringPart)
 					tokens.push(makeToken('.', PRECEDENCE_ARITHMETIC)); // explicit concatenation
 				else
@@ -502,14 +511,16 @@ function tokenizeExpr(expr) {
 			expr = expr.substring(match[0].length);
 		}
 
-		if (quoteChar) {
+		if (cstring) {
 			if (match = cstring.exec(expr)) {
 				if (precededByStringPart)
 					tokens.push(makeToken('.', PRECEDENCE_ARITHMETIC)); // explicit concatenation
 				else
 					precededByStringPart = true;
 
-				tokens.push(makeToken(match[1], PRECEDENCE_OPERAND, 'string'));
+				// ap_expr backslash inside string escapes ANY character, so
+				// just eat all backslash characters
+				tokens.push(makeToken(match[1].replace(/\\(.)/g, "$1"), PRECEDENCE_OPERAND, 'string'));
 				expr = expr.substring(match[0].length);
 			}
 		}
@@ -519,7 +530,7 @@ function tokenizeExpr(expr) {
 			throw new Error('Syntax error: near "' + expr + '"');
 	}
 
-	if (quoteChar)
+	if (cstring)
 		throw new Error('Syntax error: unterminated string');
 	return tokens;
 }
@@ -989,6 +1000,7 @@ function processShtml(input, filename) {
 	return output;
 }
 
+document.documentElement.style.visibility = 'hidden';
 var processed = processShtml(getContents(normalizeFilename(window.location.href)), normalizeFilename(window.location.href));
 
 try {

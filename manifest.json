@@ -3,7 +3,7 @@
   "name": "js_mod_include (SHTML processor)",
   "description": "A content script that emulates mod_include (under Apache 2.3.13 and later) on local .shtml files.",
   "author": "Kevin Jin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "homepage_url": "https://github.com/Kevin-Jin/js_mod_include",
   "permissions": [
     "tabs",
@@ -12,8 +12,9 @@
   "content_scripts": [
     {
       "matches": [ "file://*/*.shtml*" ],
-      "js": [ "data/content_script.js" ]
-    }  
+      "run_at": "document_start",
+      "js": [ "data/utf8.js", "data/content_script.js" ]
+    }
   ],
   "manifest_version": 2,
   "update_url": "http://clients2.google.com/service/update2/crx"
